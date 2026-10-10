@@ -18,6 +18,7 @@ ROOT=Path(__file__).resolve().parents[1]
 DB=ROOT/"data"/"avelin-health.db"
 DIST=ROOT/"dist"
 sys.path.insert(0,str(ROOT/"scripts"))
+from llm_provider import ollama_chat, settings, public_status
 from agent_tools import TOOLS, TOOL_SCHEMAS, get_health_summary, get_nutrition_gap, search_store_products
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -143,6 +144,14 @@ def openai_chat(messages):
         payload={"model":model,"previous_response_id":result["id"],"input":outputs,"tools":TOOL_SCHEMAS,"parallel_tool_calls":False}
     return {"text":"Превышен лимит последовательных обращений к данным.","mode":"error"}
 
+def chat(messages):
+    provider = settings()["provider"]
+    if provider == "ollama":
+        return ollama_chat(messages)
+    if provider == "openai":
+        return openai_chat(messages)
+    return {"text": offline_chat(messages[-1].get("content", "")), "mode": "local"}
+
 class Handler(SimpleHTTPRequestHandler):
     def json_response(self,data,status=200):
         raw=json.dumps(data,ensure_ascii=False).encode(); self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8"); self.send_header("Content-Length",str(len(raw))); self.send_header("Cache-Control","no-store"); self.end_headers(); self.wfile.write(raw)
@@ -152,7 +161,7 @@ class Handler(SimpleHTTPRequestHandler):
         parsed=urlparse(self.path)
         if parsed.path=="/api/profile": return self.json_response(profile_get())
         if parsed.path=="/api/catalog": return self.json_response(catalog_get(parse_qs(parsed.query)))
-        if parsed.path=="/api/status": return self.json_response({"ok":True,"app":"avelin-health","llmConfigured":bool(os.getenv("OPENAI_API_KEY"))})
+        if parsed.path=="/api/status": return self.json_response({"ok":True,"app":"avelin-health",**public_status()})
         path=(DIST/(parsed.path.lstrip("/") or "index.html")).resolve()
         if DIST.resolve() not in path.parents and path!=DIST.resolve(): return self.send_error(403)
         if not path.is_file(): path=DIST/"index.html"
@@ -167,7 +176,7 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 data=self.read_json(); messages=data.get("messages",[])
                 if not messages:return self.json_response({"error":"messages required"},400)
-                return self.json_response(openai_chat(messages))
+                return self.json_response(chat(messages))
             except Exception as exc:return self.json_response({"error":str(exc)},502)
         self.send_error(404)
     def log_message(self,format,*args): print(f"[Avelin] {format%args}")

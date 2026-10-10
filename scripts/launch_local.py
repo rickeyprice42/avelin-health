@@ -264,10 +264,12 @@ def gui(services):
                 state["running"] = True
                 status.set("Сайт работает — можно тестировать.")
                 try:
-                    cloud = json.loads(read_url(API + "/api/status")).get("llmConfigured")
+                    llm = json.loads(read_url(API + "/api/status"))
+                    cloud = llm.get("llmConfigured")
                 except (OSError, ValueError):
                     cloud = False
-                mode = "Облачный ИИ настроен" if cloud else "Чат: локальный режим без API-ключа"
+                    llm = {}
+                mode = (f"Чат: {llm.get('llmProvider')} · {llm.get('llmModel')}" if cloud else "Чат: локальный режим без API-ключа")
                 note.set(mode + ("\nСервер запущен отдельно и не будет остановлен этим окном."
                                   if services.reused else "\n" + URL))
                 open_button.config(state="normal")
