@@ -1,0 +1,2 @@
+# Catalog export tests; the health API tests use only the standard library.
+openpyxl==3.1.5

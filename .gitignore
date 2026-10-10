@@ -1,0 +1,81 @@
+# Dependencies, build output and caches
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+*.log
+
+# Secrets and local settings (only empty examples belong in Git)
+.env
+.env.*
+!.env.example
+API*.txt
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+.pypirc
+.auth/
+.local/
+
+# Private health data and generated summaries
+/data/
+/public/data/
+apple_health_export/
+export.xml
+export_cda.xml
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.gpx
+*.fit
+
+# Browser sessions, network captures and downloaded datasets
+*.har
+*.har.*
+.kuper_browser_profile/
+.kuper_edge_profile/
+playwright-report/
+test-results/
+*.csv
+*.tsv
+*.xls
+*.xlsx
+*.zip
+*.7z
+*.rar
+*.requests.json
+/Каталоги магазинов/
+/kuper_catalog_prototype/*.json
+
+# Personal notes and loose source material; app assets live under src/assets/
+/*.txt
+!/requirements*.txt
+/*.bat
+/IMG_*
+/Изображение*
+/kuper_catalog_prototype/*.txt
+/kuper_catalog_prototype/*.docx
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+!/kuper_catalog_prototype/requirements.txt

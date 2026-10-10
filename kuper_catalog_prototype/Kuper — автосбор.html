@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Собрать Kuper</title><style>
+body{max-width:820px;margin:55px auto;padding:0 24px;font:18px/1.55 system-ui;color:#17212b}
+h1{font-size:34px;margin-bottom:8px}.button{display:inline-block;margin:20px 0;padding:15px 24px;border-radius:12px;
+background:#16a05d;color:white;font-weight:750;text-decoration:none;box-shadow:0 8px 24px #168b5140}
+.note{padding:16px 20px;border-radius:12px;background:#f1f5f7}
+</style></head><body><h1>Собрать Kuper</h1>
+<p>Перетащите зелёную кнопку мышью на панель закладок браузера:</p>
+<a class="button" href="javascript:(async () =&gt; {
+  if (location.hostname !== &quot;web.kuper.ru&quot;) {
+    alert(&quot;Сначала откройте каталог нужного магазина на web.kuper.ru.&quot;);
+    return;
+  }
+  const sid = new URL(location.href).searchParams.get(&quot;sid&quot;);
+  if (!sid || !/^\d+$/.test(sid)) {
+    alert(&quot;В адресе страницы не найден sid магазина. Сначала выберите магазин и адрес доставки.&quot;);
+    return;
+  }
+
+  const sleep = (ms) =&gt; new Promise((resolve) =&gt; setTimeout(resolve, ms));
+  const panel = document.createElement(&quot;div&quot;);
+  Object.assign(panel.style, {
+    position: &quot;fixed&quot;, right: &quot;20px&quot;, bottom: &quot;20px&quot;, zIndex: 2147483647,
+    maxWidth: &quot;430px&quot;, padding: &quot;14px 18px&quot;, borderRadius: &quot;12px&quot;,
+    background: &quot;#17212b&quot;, color: &quot;white&quot;, font: &quot;600 15px/1.4 system-ui&quot;,
+    boxShadow: &quot;0 8px 30px #0007&quot;
+  });
+  panel.textContent = &quot;Автосбор Kuper: нажмите любую продуктовую категорию в левом меню…&quot;;
+  document.body.appendChild(panel);
+
+  const nativeFetch = window.fetch.bind(window);
+  const originalFetch = window.fetch;
+  const originalOpen = XMLHttpRequest.prototype.open;
+  const originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  const originalSend = XMLHttpRequest.prototype.send;
+  let resolveCaptured;
+  const capturedPromise = new Promise((resolve) =&gt; { resolveCaptured = resolve; });
+  let captured = false;
+
+  function finishCapture(value) {
+    if (!captured &amp;&amp; value &amp;&amp; String(value.url).includes(&quot;/api/v3/entities&quot;)) {
+      captured = true;
+      resolveCaptured(value);
+    }
+  }
+
+  window.fetch = async function interceptedFetch(input, init = {}) {
+    const url = typeof input === &quot;string&quot; ? input : input.url;
+    if (String(url).includes(&quot;/api/v3/entities&quot;)) {
+      const headers = new Headers(typeof input === &quot;string&quot; ? undefined : input.headers);
+      new Headers(init.headers || {}).forEach((value, key) =&gt; headers.set(key, value));
+      let body = init.body || &quot;&quot;;
+      if (!body &amp;&amp; typeof input !== &quot;string&quot;) {
+        try { body = await input.clone().text(); } catch (_) { body = &quot;&quot;; }
+      }
+      finishCapture({ url, headers: Object.fromEntries(headers.entries()), body });
+    }
+    return nativeFetch(input, init);
+  };
+
+  XMLHttpRequest.prototype.open = function interceptedOpen(method, url, ...args) {
+    this.__kuperCapture = { method, url, headers: {} };
+    return originalOpen.call(this, method, url, ...args);
+  };
+  XMLHttpRequest.prototype.setRequestHeader = function interceptedHeader(name, value) {
+    if (this.__kuperCapture) this.__kuperCapture.headers[String(name).toLowerCase()] = value;
+    return originalSetHeader.call(this, name, value);
+  };
+  XMLHttpRequest.prototype.send = function interceptedSend(body) {
+    if (this.__kuperCapture) finishCapture({ ...this.__kuperCapture, body: body || &quot;&quot; });
+    return originalSend.call(this, body);
+  };
+
+  try {
+    const capturedRequest = await Promise.race([
+      capturedPromise,
+      sleep(120000).then(() =&gt; { throw new Error(&quot;За две минуты не появился запрос каталога. Запустите закладку снова и выберите другую категорию.&quot;); })
+    ]);
+    window.fetch = originalFetch;
+    XMLHttpRequest.prototype.open = originalOpen;
+    XMLHttpRequest.prototype.setRequestHeader = originalSetHeader;
+    XMLHttpRequest.prototype.send = originalSend;
+
+    let template;
+    try { template = JSON.parse(capturedRequest.body || &quot;{}&quot;); } catch (_) { template = {}; }
+    const allowedHeaders = [&quot;accept&quot;, &quot;content-type&quot;, &quot;x-csrf-token&quot;, &quot;client-id&quot;, &quot;client-token&quot;, &quot;anonymousid&quot;];
+    const requestHeaders = {};
+    for (const key of allowedHeaders) {
+      const value = capturedRequest.headers[key];
+      if (value) requestHeaders[key] = value;
+    }
+    requestHeaders.accept = &quot;application/json, text/plain, */*&quot;;
+    requestHeaders[&quot;content-type&quot;] = &quot;application/json&quot;;
+
+    async function fetchJson(url, options = {}) {
+      let lastError;
+      for (let attempt = 1; attempt &lt;= 4; attempt += 1) {
+        try {
+          const response = await nativeFetch(url, { credentials: &quot;include&quot;, ...options });
+          if (response.ok) return await response.json();
+          const message = `${response.status} ${response.statusText}`;
+          if (response.status !== 429 &amp;&amp; response.status &lt; 500) throw new Error(message);
+          lastError = new Error(message);
+        } catch (error) {
+          lastError = error;
+        }
+        await sleep(1500 * attempt);
+      }
+      throw lastError || new Error(&quot;ошибка запроса&quot;);
+    }
+
+    panel.textContent = &quot;Автосбор Kuper: получаю список категорий…&quot;;
+    const categoriesUrl = `/api/v3/stores/${sid}/categories`;
+    const categoryTree = await fetchJson(categoriesUrl, { headers: requestHeaders });
+    const excluded = /(skid|akts|promo|probovali|sezon|novink|rekomend|kosmetik|gigien|apte|bitov|dlya-doma|kukhni|zoot|pitom|detsk|dacha|sad-avto|odezh|obuv|aksess|podaro|sertifikat|kantsel|tvorch|elektron)/i;
+    const categories = (categoryTree.categories || []).filter((category) =&gt;
+      category &amp;&amp; category.slug &amp;&amp; Number(category.products_count) &gt; 0 &amp;&amp;
+      (category.category_type === &quot;main&quot; || !category.category_type) &amp;&amp;
+      !excluded.test(`${category.slug} ${category.name}`)
+    );
+    if (!categories.length) throw new Error(&quot;Kuper не вернул продуктовые категории.&quot;);
+
+    const pathSlug = location.pathname.split(&quot;/&quot;).filter(Boolean)[0] || &quot;kuper&quot;;
+    const suggestedName = /hleb|sol/i.test(pathSlug) ? &quot;Хлеб&amp;Соль&quot; :
+      /pyat|5ka|five/i.test(pathSlug) ? &quot;Пятёрочка&quot; : pathSlug;
+    const storeName = prompt(&quot;Название магазина для Excel:&quot;, suggestedName) || suggestedName;
+    const estimatedProducts = categories.reduce((sum, item) =&gt; sum + Number(item.products_count || 0), 0);
+    if (!confirm(`Собрать ${categories.length} продуктовых категорий (${estimatedProducts} позиций до удаления дублей)?`)) return;
+
+    const entries = [];
+    const makeEntry = (url, method, requestBody, responseBody) =&gt; ({
+      startedDateTime: new Date().toISOString(), time: 0,
+      request: {
+        method, url: new URL(url, location.origin).href, httpVersion: &quot;HTTP/2&quot;,
+        headers: [], queryString: [], cookies: [], headersSize: -1, bodySize: requestBody ? requestBody.length : 0,
+        ...(requestBody ? { postData: { mimeType: &quot;application/json&quot;, text: requestBody } } : {})
+      },
+      response: {
+        status: 200, statusText: &quot;OK&quot;, httpVersion: &quot;HTTP/2&quot;, headers: [], cookies: [],
+        content: { mimeType: &quot;application/json&quot;, text: JSON.stringify(responseBody) },
+        redirectURL: &quot;&quot;, headersSize: -1, bodySize: -1
+      }, cache: {}, timings: { send: 0, wait: 0, receive: 0 }
+    });
+    entries.push(makeEntry(categoriesUrl, &quot;GET&quot;, &quot;&quot;, categoryTree));
+    entries.push(makeEntry(`/api/v3/mweb/stores/${sid}`, &quot;GET&quot;, &quot;&quot;, { retailer: { name: storeName } }));
+
+    let requestCount = 0;
+    for (let categoryIndex = 0; categoryIndex &lt; categories.length; categoryIndex += 1) {
+      const category = categories[categoryIndex];
+      let page = 1;
+      let totalPages = Math.max(1, Math.ceil(Number(category.products_count) / 24));
+      while (page &lt;= totalPages) {
+        panel.textContent = `Kuper: ${categoryIndex + 1}/${categories.length} — ${category.name}, страница ${page}/${totalPages}`;
+        const body = {
+          ...template,
+          store_id: String(sid), category_permalink: category.slug, q: &quot;&quot;,
+          full_facets_list: true, filter: [], page: String(page), per_page: &quot;24&quot;
+        };
+        const bodyText = JSON.stringify(body);
+        const response = await fetchJson(&quot;/api/v3/entities&quot;, {
+          method: &quot;POST&quot;, headers: requestHeaders, body: bodyText
+        });
+        entries.push(makeEntry(&quot;/api/v3/entities&quot;, &quot;POST&quot;, bodyText, response));
+        requestCount += 1;
+        const reportedTotal = Number(response.meta &amp;&amp; response.meta.total_pages);
+        if (reportedTotal &gt; 0 &amp;&amp; reportedTotal &lt; 500) totalPages = reportedTotal;
+        page += 1;
+        await sleep(350);
+      }
+    }
+
+    const har = {
+      log: {
+        version: &quot;1.2&quot;,
+        creator: { name: &quot;Kuper browser collector&quot;, version: &quot;1.0&quot; },
+        comment: &quot;Complete food-category capture without cookies or request headers&quot;,
+        entries
+      }
+    };
+    const safeStem = /пят/i.test(storeName) ? &quot;pyaterochka&quot; : /хлеб|соль/i.test(storeName) ? &quot;hleb&amp;sol&quot; : pathSlug;
+    const link = document.createElement(&quot;a&quot;);
+    link.href = URL.createObjectURL(new Blob([JSON.stringify(har)], { type: &quot;application/json&quot; }));
+    link.download = `${safeStem}.complete.har`;
+    link.click();
+    setTimeout(() =&gt; URL.revokeObjectURL(link.href), 30000);
+    panel.textContent = `Готово: ${categories.length} категорий, ${requestCount} страниц`;
+    alert(&quot;Автосбор Kuper завершён. Добавьте скачанный HAR в программу и нажмите «Импортировать HAR».&quot;);
+  } catch (error) {
+    panel.textContent = &quot;Автосбор Kuper остановлен&quot;;
+    alert(`Kuper: ${error.message}`);
+  } finally {
+    window.fetch = originalFetch;
+    XMLHttpRequest.prototype.open = originalOpen;
+    XMLHttpRequest.prototype.setRequestHeader = originalSetHeader;
+    XMLHttpRequest.prototype.send = originalSend;
+    setTimeout(() =&gt; panel.remove(), 20000);
+  }
+})();">Собрать Kuper</a>
+<ol><li>Откройте в обычном браузере Пятёрочку или Хлеб&amp;Соль на web.kuper.ru и проверьте адрес.</li>
+<li>Нажмите закладку, затем один раз выберите любую продуктовую категорию в левом меню.</li>
+<li>Дождитесь скачивания файла с окончанием .complete.har.</li>
+<li>Добавьте этот HAR в программу и нажмите «Импортировать HAR».</li></ol>
+<p class="note">Сбор выполняется внутри текущей вкладки. Cookies и служебные токены в скачиваемый файл не записываются.</p>
+</body></html>

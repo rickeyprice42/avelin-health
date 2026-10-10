@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Автосбор Fix Price</title>
+  <style>
+    body { max-width: 780px; margin: 60px auto; padding: 0 24px; font: 18px/1.55 system-ui; color: #17212b; }
+    h1 { font-size: 34px; margin-bottom: 8px; }
+    .button { display: inline-block; margin: 20px 0; padding: 15px 24px; border-radius: 12px; background: #16a05d; color: white; font-weight: 750; text-decoration: none; box-shadow: 0 8px 24px #168b5140; }
+    .note { padding: 16px 20px; border-radius: 12px; background: #f1f5f7; }
+    code { background: #eef1f3; padding: 2px 6px; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Автосбор Fix Price</h1>
+  <p>Откройте эту страницу в Opera GX и перетащите зелёную кнопку мышью на панель закладок:</p>
+  <a class="button" href="javascript:(async()=>{const s=m=>new Promise(r=>setTimeout(r,m));if(!location.hostname.endsWith('fix-price.com')){alert('Сначала откройте каталог Fix Price');return}const h=document.documentElement.outerHTML,c=h.match(/productsCount\s*:\s*%22?(\d+)/),n=c?Number(c[1]):0,l=[...document.querySelectorAll('a[href*=%22page=%22]')].map(a=>Number(new URL(a.href,location.href).searchParams.get('page'))||1),t=Math.max(1,...l,n?Math.ceil(n/24):1);if(!confirm('Собрать '+t+' страниц Fix Price?'))return;const p=document.createElement('div');p.style='position:fixed;right:20px;bottom:20px;z-index:2147483647;padding:14px 18px;border-radius:12px;background:%2317212b;color:white;font:600 15px system-ui';document.body.appendChild(p);const f=document.createElement('iframe');f.style='position:fixed;width:1px;height:1px;opacity:.01;left:-10px';document.body.appendChild(f);async function g(i){const u=new URL('/catalog/produkty-i-napitki',location.origin);if(i>1)u.searchParams.set('page',i);for(let a=1;a<=3;a++){p.textContent='Fix Price: страница '+i+'/'+t;await new Promise((r,j)=>{const z=setTimeout(()=>j(Error('таймаут страницы '+i)),60000);f.onload=()=>{clearTimeout(z);r()};f.src=u.href});await s(1200);const d=f.contentDocument,x=d&&[...d.scripts].find(q=>q.textContent.includes('window.__NUXT__'));if(x&&/\bproducts\s*:\s*\[/.test(x.textContent))return{url:u.href,html:'<script>'+x.textContent+'</script>'};await s(2000*a)}throw Error('не удалось получить страницу '+i)}try{const a=[];for(let i=1;i<=t;i++){a.push(await g(i));await s(500)}const b=new Blob([JSON.stringify({format:'fixprice-pages-v1',created_at:new Date().toISOString(),advertised_products:n,pages:a})],{type:'application/json'}),e=document.createElement('a');e.href=URL.createObjectURL(b);e.download='fixprice_pages_'+new Date().toISOString().slice(0,10)+'.json';e.click();p.textContent='Готово: '+a.length+' страниц';alert('Готово. Импортируйте скачанный JSON в программе.')}catch(e){p.textContent='Автосбор остановлен';alert('Fix Price: '+e.message)}finally{f.remove();setTimeout(()=>p.remove(),15000)}})()">Собрать Fix Price</a>
+  <ol>
+    <li>Откройте обычный каталог <a href="https://fix-price.com/catalog/produkty-i-napitki">Fix Price</a> и проверьте город.</li>
+    <li>Нажмите закладку <b>«Собрать Fix Price»</b>. Не закрывайте вкладку до сообщения «Готово».</li>
+    <li>В программе нажмите <b>«Импорт Fix Price»</b> и выберите скачанный файл <code>fixprice_pages_….json</code>.</li>
+  </ol>
+  <p class="note">Закладка работает внутри вашей обычной сессии браузера, не читает пароли и отправляет данные только в локальный скачиваемый файл.</p>
+</body>
+</html>
