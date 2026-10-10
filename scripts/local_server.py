@@ -152,7 +152,7 @@ class Handler(SimpleHTTPRequestHandler):
         parsed=urlparse(self.path)
         if parsed.path=="/api/profile": return self.json_response(profile_get())
         if parsed.path=="/api/catalog": return self.json_response(catalog_get(parse_qs(parsed.query)))
-        if parsed.path=="/api/status": return self.json_response({"ok":True,"llmConfigured":bool(os.getenv("OPENAI_API_KEY"))})
+        if parsed.path=="/api/status": return self.json_response({"ok":True,"app":"avelin-health","llmConfigured":bool(os.getenv("OPENAI_API_KEY"))})
         path=(DIST/(parsed.path.lstrip("/") or "index.html")).resolve()
         if DIST.resolve() not in path.parents and path!=DIST.resolve(): return self.send_error(403)
         if not path.is_file(): path=DIST/"index.html"
