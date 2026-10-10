@@ -18,7 +18,7 @@ ROOT=Path(__file__).resolve().parents[1]
 DB=ROOT/"data"/"avelin-health.db"
 DIST=ROOT/"dist"
 sys.path.insert(0,str(ROOT/"scripts"))
-from llm_provider import ollama_chat, settings, public_status
+from llm_provider import ollama_chat, ollama_events, settings, public_status
 from agent_tools import TOOLS, TOOL_SCHEMAS, get_health_summary, get_nutrition_gap, search_store_products
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -171,11 +171,40 @@ class Handler(SimpleHTTPRequestHandler):
             try:return self.json_response(profile_put(self.read_json()))
             except Exception as exc:return self.json_response({"error":str(exc)},400)
         self.send_error(404)
+    def chat_stream(self, messages):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        def emit(event):
+            self.wfile.write((json.dumps(event, ensure_ascii=False) + "\n").encode())
+            self.wfile.flush()
+        try:
+            if settings()["provider"] == "ollama":
+                for event in ollama_events(messages):
+                    emit(event)
+            else:
+                result = chat(messages)
+                emit({"type": "delta", "text": result["text"]})
+                emit({"type": "done", "mode": result["mode"], "model": result.get("model")})
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        except Exception as exc:
+            try:
+                emit({"type": "error", "text": str(exc)})
+            except OSError:
+                pass
+
     def do_POST(self):
         if self.path=="/api/chat":
             try:
                 data=self.read_json(); messages=data.get("messages",[])
                 if not messages:return self.json_response({"error":"messages required"},400)
+                if data.get("stream"):
+                    return self.chat_stream(messages)
                 return self.json_response(chat(messages))
             except Exception as exc:return self.json_response({"error":str(exc)},502)
         self.send_error(404)

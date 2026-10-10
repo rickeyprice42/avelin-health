@@ -118,3 +118,102 @@ def ollama_chat(messages, config=None):
             history.append({"role": "tool", "tool_name": name or "unknown",
                             "content": json.dumps(value, ensure_ascii=False)})
     raise RuntimeError("Достигнут лимит вызовов инструментов. Уточни запрос.")
+
+
+def request_chat_stream(payload, config):
+    headers = {"Content-Type": "application/json"}
+    if config["key"]:
+        headers["Authorization"] = "Bearer " + config["key"]
+    req = urllib.request.Request(config["baseUrl"] + "/api/chat",
+        data=json.dumps(payload, ensure_ascii=False).encode(), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as response:
+            completed = False
+            for line in response:
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if "error" in chunk:
+                    raise RuntimeError("Ollama прервала генерацию. Повтори запрос.")
+                yield chunk
+                if chunk.get("done"):
+                    completed = True
+                    break
+            if not completed:
+                raise RuntimeError("Соединение с Ollama прервалось до завершения ответа.")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Ollama: HTTP {exc.code}. Проверь ключ, модель и лимиты Ollama.") from None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raise RuntimeError("Соединение с Ollama прервалось. Повтори запрос.") from None
+    except ValueError:
+        raise RuntimeError("Ollama вернула некорректный поток ответа.") from None
+
+
+def ollama_events(messages, config=None):
+    config = config or settings()
+    if not config["key"] and urlparse(config["baseUrl"]).hostname == "ollama.com":
+        raise RuntimeError("Для Ollama Cloud нужен ключ.")
+    history = [{"role": "system", "content": INSTRUCTIONS}]
+    for message in messages[-12:]:
+        if message.get("role") not in {"user", "assistant"} or not isinstance(message.get("content"), str):
+            raise ValueError("Некорректное сообщение чата.")
+        history.append({"role": message["role"], "content": message["content"]})
+    tools = [{"type": "function", "function": {k: schema[k] for k in ("name", "description", "parameters")}}
+             for schema in TOOL_SCHEMAS]
+    used = []
+    yield {"type": "status", "text": "Готовлю ответ…", "mode": "ollama", "model": config["model"]}
+    for _ in range(5):
+        content, thinking, calls = "", "", {}
+        for chunk in request_chat_stream({"model": config["model"], "messages": history,
+                                           "tools": tools, "stream": True}, config):
+            message = chunk.get("message") or {}
+            text = message.get("content") or ""
+            thinking += message.get("thinking") or ""
+            if text:
+                content += text
+                yield {"type": "delta", "text": text}
+            for position, call in enumerate(message.get("tool_calls") or []):
+                function = call.get("function") or {}
+                index = function.get("index", call.get("index", position))
+                name = function.get("name", "")
+                slot = calls.setdefault(index, {"name": "", "arguments": {}})
+                if name:
+                    slot["name"] = name
+                args = function.get("arguments", {})
+                if isinstance(args, str):
+                    if isinstance(slot["arguments"], dict):
+                        slot["arguments"] = ""
+                    slot["arguments"] += args
+                elif isinstance(args, dict):
+                    if not isinstance(slot["arguments"], dict):
+                        raise RuntimeError("Некорректные аргументы инструмента.")
+                    slot["arguments"].update(args)
+                else:
+                    raise RuntimeError("Некорректные аргументы инструмента.")
+                if len(calls) > 16:
+                    raise RuntimeError("Слишком много вызовов инструментов.")
+        if not calls:
+            if not content:
+                yield {"type": "delta", "text": "Модель не сформировала текст ответа."}
+            yield {"type": "done", "mode": "ollama", "model": config["model"], "usedTools": used}
+            return
+        normalized = [{"function": function} for function in calls.values()]
+        history.append({"role": "assistant", "content": content, "thinking": thinking, "tool_calls": normalized})
+        yield {"type": "status", "text": "Проверяю данные…"}
+        for function in calls.values():
+            name, args = function["name"], function["arguments"]
+            if name not in TOOLS:
+                value = {"error": "unknown_tool"}
+            else:
+                try:
+                    if isinstance(args, str):
+                        args = json.loads(args)
+                    value = TOOLS[name]["call"](**args)
+                    used.append(name)
+                except Exception:
+                    value = {"error": "tool_failed", "detail": "Проверь аргументы и доступность данных."}
+            history.append({"role": "tool", "tool_name": name or "unknown",
+                            "content": json.dumps(value, ensure_ascii=False)})
+        if content:
+            yield {"type": "delta", "text": "\n\n"}
+    raise RuntimeError("Достигнут лимит вызовов инструментов. Уточни запрос.")

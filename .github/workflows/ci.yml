@@ -35,5 +35,7 @@ jobs:
         run: python kuper_catalog_prototype/test_parser.py
       - name: Nutrition parser tests
         run: node kuper_catalog_prototype/test_nutrition_parser.js
+      - name: Chat formatting and stream tests
+        run: node --test scripts/test_chat_stream.mjs
       - name: Frontend build
         run: pnpm build
