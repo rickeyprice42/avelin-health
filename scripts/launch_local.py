@@ -24,7 +24,7 @@ HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def read_url(url):
-    with HTTP.open(url, timeout=1) as response:
+    with HTTP.open(url, timeout=5) as response:
         return response.read().decode("utf-8")
 
 
@@ -318,7 +318,9 @@ def main():
     try:
         if args.check:
             services.start()
-            print(json.dumps({"api": api_ready(), "web": web_ready(), "reused": services.reused}))
+            services.wait_ready(api_ready, "Backend verification")
+            services.wait_ready(web_ready, "Frontend verification")
+            print(json.dumps({"api": True, "web": True, "reused": services.reused}))
         else:
             gui(services)
     finally:
