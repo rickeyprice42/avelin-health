@@ -232,19 +232,24 @@ def search_store_products(stores: list[str], query: str = "", limit: int = 20) -
     if query.strip():
         where += " AND (name LIKE ? OR brand LIKE ? OR category LIKE ?)"
         params += [f"%{query.strip()}%"]*3
-    sql=f"""SELECT store_name,name,brand,category,package,price_rub,url,
-      'unknown' nutrition_status FROM catalog_products WHERE {where}
+    sql=f"""SELECT store_name,name,brand,category,package,price_rub,url,protein,fat,carbs,calories,nutrition_basis,nutrition_source,
+      CASE WHEN protein IS NOT NULL AND fat IS NOT NULL AND carbs IS NOT NULL AND calories IS NOT NULL AND nutrition_source IS NOT NULL THEN 'verified' ELSE 'unknown' END nutrition_status FROM catalog_products WHERE {where}
       ORDER BY store_name,name LIMIT ?"""
     params.append(limit)
     with connect() as conn: return [dict(r) for r in conn.execute(sql,params)]
 
 def get_user_profile() -> dict[str, Any]:
     with connect() as conn:
-        row=conn.execute("SELECT height_cm,goal,calorie_target,protein_target,updated_at FROM user_profile WHERE id=1").fetchone()
+        row=conn.execute("SELECT * FROM user_profile WHERE id=1").fetchone()
         measurements=[dict(r) for r in conn.execute("SELECT measured_at,kind,value,source FROM body_measurements ORDER BY measured_at DESC LIMIT 20")]
     return {"profile":dict(row) if row else {},"bodyMeasurements":measurements}
 
+def build_recipe_card(**kwargs):
+    import recipes
+    return recipes.build(DB, **kwargs)
+
 TOOLS = {
+    "build_recipe_card": {"description": "Prepare a catalog-backed recipe card", "call": build_recipe_card},
     "get_daily_summary": {"description":"Compact health summary for one calendar day.","call":get_daily_summary},
     "get_period_summary": {"description":"Health summary and data coverage for a 1-90 day period.","call":get_period_summary},
     "get_health_summary": {"description":"Aggregated health metrics; never raw unrestricted SQL.","call":get_health_summary},
@@ -261,3 +266,6 @@ TOOL_SCHEMAS = [
     {"type":"function","name":"search_store_products","description":"Search available products. Nutrition fields may be unknown; estimate them only as clearly labeled ranges.","parameters":{"type":"object","properties":{"stores":{"type":"array","items":{"type":"string"}},"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"required":["stores"]}},
     {"type":"function","name":"get_user_profile","description":"Read user-confirmed profile data and manual measurements.","parameters":{"type":"object","properties":{},"required":[]}},
 ]
+
+from recipes import SCHEMA as RECIPE_SCHEMA
+TOOL_SCHEMAS.append(RECIPE_SCHEMA)

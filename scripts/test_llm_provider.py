@@ -27,7 +27,7 @@ class OllamaAdapterTest(unittest.TestCase):
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertEqual(payload["messages"][-1]["role"], "tool")
         self.assertEqual(json.loads(payload["messages"][-1]["content"]), {"steps":1234})
-        self.assertEqual(len(payload["tools"]), 6)
+        self.assertEqual(len(payload["tools"]), 7)
 
     def test_unknown_tool_is_not_executed(self):
         replies = [{"message":{"tool_calls":[{"function":{"name":"delete_all_data","arguments":{}}}]}},
@@ -42,7 +42,7 @@ class OllamaAdapterTest(unittest.TestCase):
         with patch.object(llm,"request_chat",return_value=reply) as request:
             with self.assertRaisesRegex(RuntimeError,"лимит"):
                 llm.ollama_chat([{"role":"user","content":"test"}],CONFIG)
-        self.assertEqual(request.call_count,5)
+        self.assertEqual(request.call_count,12)
 
     def test_provider_error_never_falls_back_to_openai(self):
         with patch.object(local_server,"settings",return_value=CONFIG), \

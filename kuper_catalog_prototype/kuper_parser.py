@@ -291,6 +291,7 @@ def products_from_hars(paths):
         raise ValueError("HAR-файлы не найдены")
 
     category_names = {}
+    expected_categories = {}
     store_names = {}
     for candidate in loaded:
         for entry in iter_har_entries(candidate):
@@ -298,7 +299,12 @@ def products_from_hars(paths):
             category_match = re.fullmatch(r"/api/v3/stores/(\d+)/categories", path)
             store_match = re.fullmatch(r"/api/v3/mweb/stores/(\d+)", path)
             if category_match:
-                add_category_names(har_json(entry), category_names)
+                tree = har_json(entry)
+                add_category_names(tree, category_names)
+                excluded = re.compile(r"skid|akts|promo|probovali|sezon|novink|rekomend|kosmetik|gigien|apte|bitov|dlya-doma|kukhni|zoot|pitom|detsk|dacha|sad-avto|odezh|obuv|aksess|podaro|sertifikat|kantsel|tvorch|elektron", re.I)
+                for category in (tree or {}).get("categories", []):
+                    if isinstance(category, dict) and category.get("slug") and category.get("category_type") in (None, "main") and float(category.get("products_count") or 0) > 0 and not excluded.search(f"{category['slug']} {category.get('name', '')}"):
+                        expected_categories[f"{category_match.group(1)}|{category['slug']}"] = category
             elif store_match:
                 name = store_name_from_json(har_json(entry))
                 if name:
@@ -354,6 +360,9 @@ def products_from_hars(paths):
                 else:
                     products[key] = (previous[0], merge(previous[1], {k: v for k, v in item.items() if k != "категория"}))
     incomplete_categories = []
+    for key, category in expected_categories.items():
+        if key not in coverage:
+            incomplete_categories.append({"category": category.get("name") or category["slug"], "store": store_names.get(key.split("|")[0], ""), "permalink": category["slug"], "missing_pages": [1], "total_pages": 1})
     for coverage_key, item_coverage in coverage.items():
         expected = set(range(1, item_coverage["total_pages"] + 1))
         missing = sorted(expected - item_coverage["pages"])
@@ -376,7 +385,7 @@ def products_from_hars(paths):
         "known_category_names": len(category_names),
         "incomplete_categories": incomplete_categories,
         "stores": store_counts,
-        "complete_capture": bool(loaded) and not incomplete_categories and all(
+        "complete_capture": bool(coverage) and not incomplete_categories and all(
             candidate.name.casefold().endswith(".complete.har") for candidate in loaded
         ),
     }

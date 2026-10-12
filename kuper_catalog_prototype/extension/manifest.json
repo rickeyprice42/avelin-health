@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Avelin · ночной сбор каталога",
+  "version": "0.1.0",
+  "description": "Обновление товаров и проверенных КБЖУ в вашей обычной браузерной сессии.",
+  "permissions": ["storage", "unlimitedStorage", "scripting", "tabs"],
+  "host_permissions": ["https://web.kuper.ru/*", "https://kuper.ru/*", "https://fix-price.com/*", "https://shop.slata.com/*", "http://127.0.0.1:8767/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html"}
+}

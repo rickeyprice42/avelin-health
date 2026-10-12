@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ChatScreen } from "./ChatScreen";
+import { RecipesScreen } from "./Recipes";
 import logo from "./assets/avelin-health-logo.png";
 
 type Summary = {
@@ -42,7 +43,7 @@ const fallback: Summary = {
 
 const nav = [
   ["Сегодня", LayoutDashboard], ["Тело", Scale], ["Активность", Activity],
-  ["Сон", Moon], ["Питание", Utensils], ["Каталог", ShoppingBasket], ["Тренировки", Dumbbell],
+  ["Сон", Moon], ["Питание", Utensils], ["Каталог", ShoppingBasket], ["Мои рецепты", Salad], ["Тренировки", Dumbbell],
   ["Тренды", Waves], ["Качество данных", ShieldCheck], ["Профиль", UserRound], ["Спросить Avelin", MessageCircle],
 ] as const;
 
@@ -60,7 +61,8 @@ function fmt(value: number | undefined, unit: string, empty = "—") {
 
 export function App() {
   const [data, setData] = useState(fallback);
-  const [page, setPage] = useState<"today" | "quality" | "trends" | "nutrition" | "profile" | "catalog" | "chat">("today");
+  const [selectedRecipe, setSelectedRecipe] = useState<string | null>(null);
+  const [page, setPage] = useState<"today" | "quality" | "trends" | "nutrition" | "profile" | "catalog" | "chat" | "recipes">("today");
   useEffect(() => {
     fetch("/data/health-summary.json").then((r) => r.ok ? r.json() : Promise.reject()).then(setData).catch(() => undefined);
   }, []);
@@ -75,7 +77,7 @@ export function App() {
   return <div className="shell">
     <aside>
       <div className="brand"><img src={logo} /><div><strong>Avelin</strong><span>Health</span></div></div>
-      <nav>{nav.map(([label, Icon], i) => { const target = label === "Качество данных" ? "quality" : label === "Сегодня" ? "today" : label === "Тренды" ? "trends" : label === "Питание" ? "nutrition" : label === "Профиль" ? "profile" : label === "Каталог" ? "catalog" : label === "Спросить Avelin" ? "chat" : null; return <button onClick={() => target && setPage(target)} className={target === page ? "active" : ""} key={label}><Icon size={18}/><span>{label}</span>{i === 10 && <ChevronRight size={15}/>}</button> })}</nav>
+      <nav>{nav.map(([label, Icon]) => { const target = label === "Качество данных" ? "quality" : label === "Сегодня" ? "today" : label === "Тренды" ? "trends" : label === "Питание" ? "nutrition" : label === "Профиль" ? "profile" : label === "Каталог" ? "catalog" : label === "Мои рецепты" ? "recipes" : label === "Спросить Avelin" ? "chat" : null; return <button onClick={() => { if (target) { if (target === "recipes") setSelectedRecipe(null); setPage(target); } }} className={target === page ? "active" : ""} key={label}><Icon size={18}/><span>{label}</span>{label === "Спросить Avelin" && <ChevronRight size={15}/>}</button> })}</nav>
       <div className="privacy"><HeartPulse size={18}/><div><b>Данные остаются здесь</b><span>Локальное хранение на этом компьютере</span></div></div>
     </aside>
     <main>{page === "today" ? <>
@@ -89,7 +91,7 @@ export function App() {
         <article className="chart panel"><div className="panel-title"><span>Вес · динамика</span><small>30 ДНЕЙ</small></div><div className="chart-empty"><div className="fake-line"><i/><i/><i/><i/><i/><i/></div><span><ArrowDownRight size={18}/> График появится после нормализации измерений</span></div></article>
         <article className="ask"><Sparkles size={22}/><div><span>AVELIN</span><h3>Что ты хочешь узнать о своих данных?</h3></div><button><ChevronRight/></button></article>
       </section>
-      </> : page === "quality" ? <QualityScreen data={data} onBack={() => setPage("today")}/> : page === "trends" ? <TrendsScreen data={data}/> : page === "nutrition" ? <NutritionScreen data={data}/> : page === "profile" ? <ProfileScreen/> : page === "catalog" ? <CatalogScreen/> : <ChatScreen/>}</main>
+      </> : page === "quality" ? <QualityScreen data={data} onBack={() => setPage("today")}/> : page === "trends" ? <TrendsScreen data={data}/> : page === "nutrition" ? <NutritionScreen data={data}/> : page === "profile" ? <ProfileScreen/> : page === "catalog" ? <CatalogScreen/> : page === "recipes" ? <RecipesScreen initialSelected={selectedRecipe} onChat={() => setPage("chat")}/> : <ChatScreen onRecipes={id => { setSelectedRecipe(id); setPage("recipes"); }}/>}</main>
   </div>;
 }
 
@@ -144,12 +146,12 @@ function ProfileScreen() {
   </div>;
 }
 
-type Product={store_name:string;name:string;brand?:string;category?:string;package?:string;price_rub?:number;protein?:number;fat?:number;carbs?:number;calories?:number;nutrition_basis?:string;url?:string;is_food?:number};
+type Product={store_name:string;name:string;brand?:string;category?:string;package?:string;price_rub?:number;protein?:number;fat?:number;carbs?:number;calories?:number;nutrition_basis?:string;nutrition_source?:string;url?:string;is_food?:number};
 function CatalogScreen(){
   const [items,setItems]=useState<Product[]>([]),[stores,setStores]=useState<string[]>([]),[ready,setReady]=useState(0),[q,setQ]=useState(""),[store,setStore]=useState(""),[loading,setLoading]=useState(true);
   const load=()=>{setLoading(true);const p=new URLSearchParams({q,store,limit:"30"});fetch(`/api/catalog?${p}`).then(r=>r.json()).then(d=>{setItems(d.items||[]);setStores(d.stores||[]);setReady(d.ready||0)}).finally(()=>setLoading(false))};
   useEffect(load,[]);
-  return <div><header><div><p className="eyebrow">4 МАГАЗИНА · ВСЕ ДОСТУПНЫЕ ТОВАРЫ</p><h1>Каталог продуктов</h1><p className="subtitle">КБЖУ временно оценивает Avelin диапазоном. Данные упаковки и FatSecret всегда приоритетнее.</p></div><span className="verified"><PackageCheck size={16}/> {ready.toLocaleString("ru-RU")} товаров доступно</span></header><section className="catalog-filters panel"><div className="searchbox"><Search size={16}/><input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&load()} placeholder="Название, бренд или категория"/></div><select value={store} onChange={e=>setStore(e.target.value)}><option value="">Все магазины</option>{stores.map(s=><option key={s}>{s}</option>)}</select><div className="estimate-badge"><Sparkles size={14}/><span>КБЖУ оценит агент</span></div><button onClick={load}><Search size={15}/> Найти</button></section>{loading?<div className="catalog-loading"><LoaderCircle/> Загружаю каталог…</div>:<section className="product-grid">{items.map((p,i)=><article className="product-card" key={`${p.store_name}-${p.name}-${i}`}><div><span>{p.store_name}</span><small>{p.category}</small></div><h3>{p.name}</h3><p>{[p.brand,p.package].filter(Boolean).join(" · ")}</p>{p.is_food?<div className="product-macros unknown"><Sparkles size={15}/><b>Примерная оценка по запросу<small>не является фактическим КБЖУ</small></b></div>:<div className="product-macros unknown"><PackageCheck size={15}/><b>Непищевой товар<small>не участвует в подборе рациона</small></b></div>}<footer><strong>{p.price_rub?`${p.price_rub.toLocaleString("ru-RU")} ₽`:"Цена не указана"}</strong>{p.url&&<a href={p.url} target="_blank" rel="noreferrer">Карточка <ChevronRight size={13}/></a>}</footer></article>)}</section>}</div>
+  return <div><header><div><p className="eyebrow">4 МАГАЗИНА · ВСЕ ДОСТУПНЫЕ ТОВАРЫ</p><h1>Каталог продуктов</h1><p className="subtitle">КБЖУ из проверенных карточек магазинов. Для остальных товаров Avelin может дать примерную оценку.</p></div><span className="verified"><PackageCheck size={16}/> {ready.toLocaleString("ru-RU")} товаров доступно</span></header><section className="catalog-filters panel"><div className="searchbox"><Search size={16}/><input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&load()} placeholder="Название, бренд или категория"/></div><select value={store} onChange={e=>setStore(e.target.value)}><option value="">Все магазины</option>{stores.map(s=><option key={s}>{s}</option>)}</select><div className="estimate-badge"><Sparkles size={14}/><span>Карточки + оценка Avelin</span></div><button onClick={load}><Search size={15}/> Найти</button></section>{loading?<div className="catalog-loading"><LoaderCircle/> Загружаю каталог…</div>:<section className="product-grid">{items.map((p,i)=><article className="product-card" key={`${p.store_name}-${p.name}-${i}`}><div><span>{p.store_name}</span><small>{p.category}</small></div><h3>{p.name}</h3><p>{[p.brand,p.package].filter(Boolean).join(" · ")}</p>{p.is_food&&p.calories!=null&&p.protein!=null&&p.fat!=null&&p.carbs!=null&&p.nutrition_source?<div className="product-macros verified-nutrition"><b>{p.calories}<small>ккал</small></b><b>{p.protein}<small>белки, г</small></b><b>{p.fat}<small>жиры, г</small></b><b>{p.carbs}<small>углеводы, г</small></b><small>{p.nutrition_basis} · {p.nutrition_source}</small></div>:p.is_food?<div className="product-macros unknown"><Sparkles size={15}/><b>Примерная оценка по запросу<small>не является фактическим КБЖУ</small></b></div>:<div className="product-macros unknown"><PackageCheck size={15}/><b>Непищевой товар<small>не участвует в подборе рациона</small></b></div>}<footer><strong>{p.price_rub?`${p.price_rub.toLocaleString("ru-RU")} ₽`:"Цена не указана"}</strong>{p.url&&<a href={p.url} target="_blank" rel="noreferrer">Карточка <ChevronRight size={13}/></a>}</footer></article>)}</section>}</div>
 }
 
 function QualityScreen({data, onBack}: {data: Summary; onBack: () => void}) {

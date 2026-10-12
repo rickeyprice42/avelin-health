@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sqlite3
 import sys
 from pathlib import Path
@@ -37,20 +38,24 @@ def truthy(value: str | None) -> int:
 def nutrition_quality(row: dict[str, str]) -> tuple[int, str | None]:
     values = [number(row.get(k)) for k in ("белки", "жиры", "углеводы", "ккал")]
     protein, fat, carbs, calories = values
-    if any(v is None for v in values): return 0, "КБЖУ заполнено не полностью"
+    if any(v is None or not math.isfinite(v) for v in values): return 0, "КБЖУ заполнено не полностью"
+    source = (row.get("источник_кбжу") or "").strip()
+    if not source or "пример" in source.casefold(): return 0, "Нет подтверждённого источника КБЖУ"
+    if source.startswith("карточка ") and row.get("кбжу_парсер") != "nutrition-v2": return 0, "Устаревший парсер КБЖУ"
+    if row.get("кбжу_на") not in {"100 г", "100 мл"}: return 0, "Неизвестная база КБЖУ"
     if any(v < 0 for v in values) or any(v > 100 for v in (protein, fat, carbs)): return 0, "КБЖУ вне допустимого диапазона"
     if protein + fat + carbs > 105: return 0, "Сумма макронутриентов превышает 100 г"
     if "проверить" in (row.get("кбжу_статус") or "").casefold(): return 0, "Источник пометил КБЖУ для проверки"
     if calories > 950: return 0, "Калорийность вне допустимого диапазона"
-    if calories < 1 and max(protein, fat, carbs) < 0.1: return 0, "Подозрительно малые значения КБЖУ"
     estimated = protein * 4 + carbs * 4 + fat * 9
-    if estimated > 10 and (calories < estimated * .55 or calories > estimated * 1.6):
+    if not (estimated <= 12 and calories <= 12) and abs(calories-estimated) > max(25, estimated*.30):
         return 0, "КБЖУ не согласуется с калорийностью"
     return 1, None
 
-def import_catalog(csv_path: Path, db_path: Path) -> dict:
+def import_catalog(csv_path: Path, db_path: Path, replace_stores=False) -> dict:
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
+    conn.execute("CREATE TEMP TABLE imported_products(store_id TEXT,product_id TEXT,PRIMARY KEY(store_id,product_id))")
     read = ready = flagged = 0
     stores: set[str] = set()
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -60,10 +65,7 @@ def import_catalog(csv_path: Path, db_path: Path) -> dict:
             stores.add(store)
             allowed = truthy(row.get("использовать") or "да")
             available = truthy(row.get("доступность"))
-            # Source macros are intentionally ignored while the catalog is rebuilt.
-            # Availability controls discovery; nutrition is estimated separately and
-            # must never masquerade as a verified source value.
-            issue = "КБЖУ ожидает подтверждения или примерной оценки"
+            verified, issue = nutrition_quality(row)
             recommendation_ready = int(bool(allowed and available))
             ready += recommendation_ready
             flagged += int(issue is not None)
@@ -77,10 +79,16 @@ def import_catalog(csv_path: Path, db_path: Path) -> dict:
               recommendation_ready=excluded.recommendation_ready,quality_issue=excluded.quality_issue""", (
                 row.get("магазин_id", ""), row.get("id", ""), store, row.get("категория"), row.get("название", ""),
                 row.get("бренд"), row.get("фасовка"), number(row.get("цена_руб")), row.get("ссылка"), available,
-                None, None, None, None,
-                None, None, "ожидает оценки", row.get("состав"), allowed,
+                *([number(row.get(key)) for key in ("белки", "жиры", "углеводы", "ккал")] if verified else [None]*4),
+                row.get("кбжу_на") if verified else None, row.get("источник_кбжу") if verified else None,
+                row.get("кбжу_статус") if verified else "ожидает подтверждения", row.get("состав"), allowed,
                 row.get("обновлено_utc"), recommendation_ready, issue,
             ))
+            conn.execute("INSERT OR IGNORE INTO imported_products VALUES(?,?)", (row.get("магазин_id", ""), row.get("id", "")))
+    if replace_stores and read:
+        conn.execute("""UPDATE catalog_products SET available=0,recommendation_ready=0
+          WHERE store_id IN (SELECT store_id FROM imported_products)
+          AND NOT EXISTS(SELECT 1 FROM imported_products i WHERE i.store_id=catalog_products.store_id AND i.product_id=catalog_products.product_id)""")
     conn.commit()
     total = conn.execute("SELECT COUNT(*) FROM catalog_products").fetchone()[0]
     stats = {"read": read, "stored": total, "availableToAgent": ready, "awaitingNutrition": flagged, "stores": sorted(stores)}

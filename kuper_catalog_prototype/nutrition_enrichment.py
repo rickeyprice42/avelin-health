@@ -220,7 +220,7 @@ def quarantine_legacy_nutrition(output_dir):
     }
 
 
-def prepare_nutrition_queues(output_dir):
+def prepare_nutrition_queues(output_dir, refresh=False, max_age_days=None):
     """Create deduplicated Kuper/Fix Price queues, applying cache hits first."""
     output_dir = Path(output_dir)
     quarantine = quarantine_legacy_nutrition(output_dir)
@@ -233,9 +233,17 @@ def prepare_nutrition_queues(output_dir):
     grouped = {"kuper": {}, "fixprice": {}}
     unsupported = 0
     already_filled = 0
+    def fresh(row):
+        if refresh or not _trusted_nutrition(row): return False
+        if max_age_days is None: return True
+        try:
+            checked = datetime.fromisoformat(str(row.get("кбжу_проверено_utc") or "").replace("Z", "+00:00"))
+            if checked.tzinfo is None: checked = checked.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc)-checked).total_seconds() <= max_age_days*86400
+        except ValueError: return False
 
     for row in rows:
-        if _trusted_nutrition(row):
+        if fresh(row):
             already_filled += 1
             continue
         site, url = _site_url(row.get("ссылка"))
@@ -243,7 +251,7 @@ def prepare_nutrition_queues(output_dir):
             unsupported += 1
             continue
         cached = cache["items"].get(url)
-        if isinstance(cached, dict) and _trusted_nutrition(cached):
+        if isinstance(cached, dict) and fresh(cached):
             cached_updates.append(_update_from_data(row, cached))
             continue
         item = grouped[site].setdefault(url, {

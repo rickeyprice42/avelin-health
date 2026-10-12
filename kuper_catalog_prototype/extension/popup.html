@@ -1,0 +1,10 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><link rel="stylesheet" href="popup.css"></head><body>
+<h1>Avelin · ночной сбор</h1><p>Используются магазины и адрес, выбранные в открытых вкладках Kuper и Fix Price.</p>
+<label>Ключ локального помощника<input id="token" type="password" autocomplete="off" placeholder="Из .local/catalog-collector.json"></label>
+<button id="connect">Проверить подключение</button><div id="tabs"></div>
+<label><input id="slata" type="checkbox" checked> Также обновить ассортимент Слаты</label>
+<label><input id="refresh" type="checkbox"> Перечитать даже свежие КБЖУ</label>
+<button id="start">Обновить товары → собрать КБЖУ</button><button id="nutrition">Собрать КБЖУ из текущего каталога</button>
+<button id="resume">Продолжить сохранённый сбор</button><button id="stop">Остановить после текущей карточки</button>
+<pre id="status" aria-live="polite"></pre><p>Не закрывайте рабочие вкладки. КБЖУ сохраняются каждые 10 карточек; каждые 50 — импортируются в Avelin. Для продолжения после закрытия браузера нажмите «Продолжить».</p>
+<script type="module" src="popup.js"></script></body></html>

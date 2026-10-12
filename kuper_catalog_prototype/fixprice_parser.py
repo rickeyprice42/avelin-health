@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
 
 from slata_parser import packaging, unpack_nuxt
 
@@ -350,6 +350,7 @@ def products_from_htmls(paths):
     products = {}
     observed = 0
     loaded = []
+    complete_bundles = []
     for source in paths:
         path = Path(source)
         if not path.exists():
@@ -362,6 +363,9 @@ def products_from_htmls(paths):
                 raise ValueError(f"Не удалось прочитать пакет Fix Price {path}: {exc}") from exc
             if bundle.get("format") != "fixprice-pages-v1" or not isinstance(bundle.get("pages"), list):
                 raise ValueError(f"Файл {path.name} не является пакетом автосбора Fix Price.")
+            declared = int(bundle.get("total_pages") or 0)
+            actual = {int(parse_qs(urlparse(page.get("url") or CATALOG_URL).query).get("page", ["1"])[0]) for page in bundle["pages"] if isinstance(page, dict)}
+            complete_bundles.append(0 < declared <= 10000 and actual == set(range(1, declared+1)))
             for index, page in enumerate(bundle["pages"], start=1):
                 if isinstance(page, dict) and isinstance(page.get("html"), str):
                     sources.append((page["html"], page.get("url") or CATALOG_URL, f"{path} — страница {index}"))
@@ -382,6 +386,6 @@ def products_from_htmls(paths):
         "priced": sum(1 for row in products.values() if row.get("цена_руб")),
         "missing_prices": sum(1 for row in products.values() if not row.get("цена_руб")),
         "loaded": loaded,
-        "complete_capture": any(Path(source).suffix.casefold() == ".json" for source in paths),
+        "complete_capture": bool(complete_bundles) and len(complete_bundles) == len(paths) and all(complete_bundles),
     }
     return list(products.values()), stats

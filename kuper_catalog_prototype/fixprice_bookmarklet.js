@@ -1,4 +1,5 @@
 (async () => {
+  const options=window.__AVELIN_COLLECTOR__||{};
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   if (!location.hostname.endsWith("fix-price.com")) {
     alert("Сначала откройте каталог Fix Price, затем нажмите закладку ещё раз.");
@@ -11,7 +12,7 @@
   const linkedPages = [...document.querySelectorAll('a[href*="page="]')]
     .map((link) => Number(new URL(link.href, location.href).searchParams.get("page")) || 1);
   const totalPages = Math.max(1, ...linkedPages, advertised ? Math.ceil(advertised / 24) : 1);
-  if (!confirm(`Fix Price сообщает примерно ${advertised || "неизвестное число"} товаров. Собрать ${totalPages} страниц?`)) {
+  if (!options.automatic&&!confirm(`Fix Price сообщает примерно ${advertised || "неизвестное число"} товаров. Собрать ${totalPages} страниц?`)) {
     return;
   }
 
@@ -50,15 +51,19 @@
   try {
     const pages = [];
     for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+      if(options.stopped)throw new Error("Сбор остановлен пользователем");
       pages.push(await loadPage(pageNumber));
       await sleep(500);
     }
-    const payload = JSON.stringify({
+    const capture = {
       format: "fixprice-pages-v1",
       created_at: new Date().toISOString(),
       advertised_products: advertised,
+      total_pages: totalPages,
       pages
-    });
+    };
+    if(options.onResult){await options.onResult({kind:"fixprice",data:capture});return;}
+    const payload=JSON.stringify(capture);
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
     link.download = `fixprice_pages_${new Date().toISOString().slice(0, 10)}.json`;
@@ -68,7 +73,7 @@
     alert("Автосбор Fix Price завершён. Импортируйте скачанный JSON в программе «Каталоги магазинов».");
   } catch (error) {
     panel.textContent = "Автосбор остановлен";
-    alert(`Fix Price: ${error.message}`);
+    if(options.onError)options.onError(error.message);else alert(`Fix Price: ${error.message}`);
   } finally {
     frame.remove();
     setTimeout(() => panel.remove(), 15000);

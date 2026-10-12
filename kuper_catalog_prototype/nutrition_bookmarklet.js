@@ -1,4 +1,8 @@
 (async()=>{
+  const options=window.__AVELIN_COLLECTOR__||{};
+  if(window.__avelinNutritionRunning)throw new Error("Сбор КБЖУ уже запущен в этой вкладке");
+  window.__avelinNutritionRunning=true;
+  try{
   const QUEUE="nutrition-queue-v1",BATCH="nutrition-batch-v1";
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const host=location.hostname.toLowerCase().replace(/^www\./,"");
@@ -6,18 +10,23 @@
   const site=host==="kuper.ru"||host==="sbermarket.ru"||kuperCatalog?"kuper":host==="fix-price.com"?"fixprice":"";
   if(!site){alert("Откройте обычную страницу web.kuper.ru, kuper.ru или fix-price.com и снова нажмите закладку «Собрать КБЖУ».");return;}
 
+  let pack=options.pack;
+  if(!pack){
   const input=document.createElement("input");
   input.type="file";input.accept=".json,application/json";input.style.display="none";
   document.body.appendChild(input);input.click();
   const file=await new Promise(resolve=>{input.onchange=()=>resolve(input.files&&input.files[0]);setTimeout(()=>resolve(null),120000);});
   input.remove();if(!file)return;
 
-  let pack;
   try{pack=JSON.parse(await file.text());}catch(e){alert("Не удалось прочитать JSON: "+e.message);return;}
+  }
   if(!pack||![QUEUE,BATCH].includes(pack.format)||pack.site!==site){
     alert("Выбран не тот файл очереди. Для этой вкладки нужен пакет «"+(site==="kuper"?"Kuper":"Fix Price")+"».");return;
   }
   let remaining=(pack.format===QUEUE?pack.entries:pack.remaining)||[];
+  if(!Array.isArray(remaining)||remaining.some(entry=>{
+    try{const url=new URL(entry.url);return url.protocol!=="https:"||!(site==="kuper"?["kuper.ru","sbermarket.ru"]:["fix-price.com"]).includes(url.hostname);}catch{return true;}
+  }))throw new Error("В очереди есть неподдерживаемые ссылки");
   const prior=pack.format===BATCH&&Array.isArray(pack.results)?pack.results:[];
   if(!remaining.length){alert("В этом пакете больше нет необработанных карточек.");return;}
   if(kuperCatalog){
@@ -27,17 +36,34 @@
     location.href=target.url;
     return;
   }
-  const raw=prompt("Сколько карточек обработать сейчас? Сначала скрипт проверит 8 карточек и сам остановится, если КБЖУ не читаются.",String(Math.min(50,remaining.length)));
+  const raw=options.pack?"все":prompt("Сколько карточек обработать? Введите «все» для ночного прохода. Прогресс сохраняется в этой вкладке; сначала проверяются 8 карточек.","все");
   if(raw===null)return;
-  const limit=Math.max(1,Math.min(250,parseInt(raw,10)||50,remaining.length));
+  const parsed=/^(все|all|0)$/i.test(String(raw).trim())?remaining.length:Number(raw);
+  if(!Number.isInteger(parsed)||parsed<1)throw new Error("Введите положительное число или «все»");
+  const limit=Math.min(parsed,remaining.length);
+  // Checkpoints never contain cookies or headers, only queue entries and results.
+  const checkpointKey="avelin.nutrition.checkpoint."+site;
+  if(!options.pack){
+    try{
+      const stored=JSON.parse(localStorage.getItem(checkpointKey)||"null");
+      const queueUrls=new Set(remaining.map(entry=>entry.url));
+      if(stored&&stored.parser_version==="nutrition-v2"&&stored.results?.length&&stored.results.every(entry=>queueUrls.has(entry.url)||prior.some(item=>item.url===entry.url))&&confirm("Найден сохранённый прогресс. Продолжить его?")){
+        const found=new Set(stored.results.map(entry=>entry.url));
+        prior.push(...stored.results.filter(entry=>!prior.some(item=>item.url===entry.url)));
+        remaining=remaining.filter(entry=>!found.has(entry.url));
+      }
+    }catch(error){console.warn("Не удалось прочитать сохранённый прогресс",error);}
+  }
 
   const overlay=document.createElement("div");
   overlay.style="position:fixed;z-index:2147483647;right:18px;bottom:18px;width:390px;padding:18px 20px;border-radius:14px;background:#17212bf2;color:white;font:15px/1.45 system-ui;box-shadow:0 12px 42px #0008";
-  overlay.innerHTML="<b style='font-size:18px'>Сбор КБЖУ</b><div id='kbju-progress' style='margin-top:8px'>Подготовка…</div><div style='height:8px;background:#ffffff25;border-radius:9px;margin-top:12px;overflow:hidden'><div id='kbju-bar' style='height:100%;width:0;background:#28d17c'></div></div>";
+  overlay.innerHTML="<b style='font-size:18px'>Сбор КБЖУ</b><div id='kbju-progress' style='margin-top:8px'>Подготовка…</div><div style='height:8px;background:#ffffff25;border-radius:9px;margin-top:12px;overflow:hidden'><div id='kbju-bar' style='height:100%;width:0;background:#28d17c'></div></div><button id='kbju-stop' style='margin-top:12px'>Остановить и сохранить</button>";
   document.body.appendChild(overlay);
   const progress=overlay.querySelector("#kbju-progress"),bar=overlay.querySelector("#kbju-bar");
   let done=0,ok=0;
-  const update=()=>{progress.textContent=`Обработано ${done} из ${limit} · найдено ${ok}`;bar.style.width=`${Math.round(done/limit*100)}%`;};
+  let stopped=false,blocked=false,checkpointError="";
+  overlay.querySelector("#kbju-stop").onclick=()=>{stopped=true;progress.textContent="Завершаю текущую карточку и сохраняю…";};
+  const update=()=>{progress.textContent=`Обработано ${done} из ${Math.min(limit,remaining.length)} · найдено ${ok}`;bar.style.width=`${Math.round(done/Math.max(1,Math.min(limit,remaining.length))*100)}%`;};
   update();
 
   const clean=s=>String(s||"").replace(/\u00a0/g," ").replace(/[ \t]+/g," ").replace(/\n\s+/g,"\n").trim();
@@ -230,44 +256,61 @@
     for(let attempt=1;attempt<=3;attempt++){
       let html="";
       try{
-        const response=await fetch(url,{credentials:"include",cache:"no-store",headers:{Accept:"text/html,application/xhtml+xml"}});
+        const response=await fetch(url,{credentials:"include",cache:"no-store",signal:AbortSignal.timeout(30000),headers:{Accept:"text/html,application/xhtml+xml"}});
+        if([401,403,429].includes(response.status)){const error=new Error("HTTP "+response.status+": требуется пауза или проверка сайта");error.blocked=true;throw error;}
         if(!response.ok)throw new Error("HTTP "+response.status);
         html=await response.text();if(html.length<1000)throw new Error("пустой ответ");
+        const visible=nodeText(new DOMParser().parseFromString(html,"text/html").body);
+        if(/captcha|провер(?:ьте|ка).*?(?:робот|безопасност)|отключите VPN|доступ ограничен/i.test(visible)){const error=new Error("Сайт запросил проверку доступа");error.blocked=true;throw error;}
         return parseHtml(html,url);
-      }catch(e){last=e.message||String(e);if(html)lastDiagnostic=inspectHtml(html,url,"fetch");if(attempt<3)await sleep(900*attempt);}
+      }catch(e){if(e.blocked)throw e;last=e.message||String(e);if(html)lastDiagnostic=inspectHtml(html,url,"fetch");if(attempt<3)await sleep(900*attempt);}
     }
     try{return await frameCard(url);}catch(e){const error=new Error((last?last+"; ":"")+(e.message||"карточка недоступна"));error.diagnostic=e.diagnostic||lastDiagnostic;throw error;}
   };
 
   const batch=remaining.slice(0,limit),later=remaining.slice(limit),success=[],failed=[];
+  const attempted=new Set();
   const diagnostics=[];
+  let checkpointChain=Promise.resolve();
+  const snapshot=()=>({format:BATCH,parser_version:"nutrition-v2",site,created_at:new Date().toISOString(),results:[...prior,...success],remaining:[...batch.filter(entry=>!attempted.has(entry.url)),...later,...failed],diagnostics,stats:{processed:done,found:ok,failed:failed.length,total_results:prior.length+success.length,stopped:stopped||!!options.stopped,blocked,checkpoint_error:checkpointError}});
+  const checkpoint=()=>{
+    const value=snapshot();
+    checkpointChain=checkpointChain.then(async()=>{
+      if(options.onCheckpoint)await options.onCheckpoint(value);
+      else localStorage.setItem(checkpointKey,JSON.stringify(value));
+    }).catch(error=>{checkpointError="Не удалось сохранить прогресс: "+error.message;stopped=true;});
+    return checkpointChain;
+  };
   const processEntries=async entries=>{
     let cursor=0;
     const worker=async()=>{
       while(true){
+        if(stopped||options.stopped)return;
         const index=cursor++;if(index>=entries.length)return;
         const entry=entries[index];
         try{const data=await fetchCard(entry.url);success.push({...entry,status:"ok",captured_at:new Date().toISOString(),data});ok++;}
         catch(e){
+          if(e.blocked){blocked=true;stopped=true;}
           failed.push({...entry,попыток:Number(entry.попыток||0)+1,последняя_ошибка:String(e&&e.message||e||"неизвестная ошибка").slice(0,300)});
           if(e&&e.diagnostic&&diagnostics.length<8)diagnostics.push({...e.diagnostic,name:entry.name||entry.название||"",error:String(e.message||e).slice(0,300)});
         }
-        done++;update();await sleep(250);
+        attempted.add(entry.url);done++;update();await checkpoint();await sleep(1000);
       }
     };
-    await Promise.all(Array.from({length:Math.min(2,entries.length)},worker));
+    await Promise.all(Array.from({length:1},worker));
   };
   const probeSize=Math.min(8,batch.length);
   await processEntries(batch.slice(0,probeSize));
   const probeFailed=ok===0&&!diagnostics.some(item=>item&&item.has_nutrition_heading);
   if(!probeFailed)await processEntries(batch.slice(probeSize));
-  const untouched=probeFailed?batch.slice(probeSize):[];
-  remaining=[...untouched,...later,...failed];
-  const output={format:BATCH,parser_version:"nutrition-v2",site,created_at:new Date().toISOString(),results:[...prior,...success],remaining,diagnostics,stats:{processed:done,found:ok,failed:failed.length,total_results:prior.length+success.length,remaining:remaining.length,probe_stopped:probeFailed}};
+  await checkpoint();
+  const output=snapshot();remaining=output.remaining;output.stats.remaining=remaining.length;output.stats.probe_stopped=probeFailed;
+  if(options.onResult){await options.onResult(output);return;}
   const blob=new Blob([JSON.stringify(output,null,2)],{type:"application/json;charset=utf-8"}),a=document.createElement("a");
   a.href=URL.createObjectURL(blob);a.download=`${probeFailed?"КБЖУ диагностика":"КБЖУ пакет"} ${site==="kuper"?"Kuper":"Fix Price"} ${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),30000);
-  progress.textContent=probeFailed?`Остановлено после проверки ${probeSize} карточек: найдено 0. Диагностика скачана.`:`Готово: найдено ${ok}, осталось ${remaining.length}. Файл скачан.`;bar.style.width="100%";
+  progress.textContent=checkpointError||blocked?"Сбор остановлен; прогресс сохранён, проверьте сайт и файл.":probeFailed?`Остановлено после проверки ${probeSize} карточек: найдено 0. Диагностика скачана.`:`Готово: найдено ${ok}, осталось ${remaining.length}. Файл скачан.`;bar.style.width="100%";
   setTimeout(()=>overlay.remove(),15000);
   if(probeFailed){alert(`Сбор автоматически остановлен после ${probeSize} карточек: КБЖУ не найдены ни в одной. Скачан файл «КБЖУ диагностика …json». Ничего импортировать не нужно — передайте этот файл мне для исправления.`);return;}
   alert(remaining.length?`Пакет скачан. Найдено новых карточек: ${ok}. Осталось: ${remaining.length}.\n\nЧтобы продолжить, снова нажмите закладку и выберите только что скачанный пакет.`:`Все карточки обработаны. Пакет скачан — импортируйте его в программу.`);
-})().catch(e=>alert("Сбор КБЖУ остановлен: "+(e&&e.message?e.message:e)));
+  }finally{window.__avelinNutritionRunning=false;}
+})().catch(e=>{const options=window.__AVELIN_COLLECTOR__||{};if(options.onError)options.onError(e.message||String(e));else alert("Сбор КБЖУ остановлен: "+(e&&e.message?e.message:e));});

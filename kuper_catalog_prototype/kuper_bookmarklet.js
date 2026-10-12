@@ -1,4 +1,5 @@
 (async () => {
+  const options=window.__AVELIN_COLLECTOR__||{};
   if (location.hostname !== "web.kuper.ru") {
     alert("Сначала откройте каталог нужного магазина на web.kuper.ru.");
     return;
@@ -64,6 +65,14 @@
   };
 
   try {
+    if(options.automatic){
+      const link=[...document.querySelectorAll('a[href]')].find(item=>{
+        const target=new URL(item.href,location.href);
+        return target.origin===location.origin&&target.pathname.includes('/c/')&&target.href!==location.href;
+      });
+      if(link)link.click();
+      else panel.textContent="Не найдена ссылка категории. Выберите любую продуктовую категорию один раз.";
+    }
     const capturedRequest = await Promise.race([
       capturedPromise,
       sleep(120000).then(() => { throw new Error("За две минуты не появился запрос каталога. Запустите закладку снова и выберите другую категорию."); })
@@ -115,9 +124,9 @@
     const pathSlug = location.pathname.split("/").filter(Boolean)[0] || "kuper";
     const suggestedName = /hleb|sol/i.test(pathSlug) ? "Хлеб&Соль" :
       /pyat|5ka|five/i.test(pathSlug) ? "Пятёрочка" : pathSlug;
-    const storeName = prompt("Название магазина для Excel:", suggestedName) || suggestedName;
+    const storeName = options.storeName || (options.automatic?suggestedName:prompt("Название магазина для Excel:", suggestedName)) || suggestedName;
     const estimatedProducts = categories.reduce((sum, item) => sum + Number(item.products_count || 0), 0);
-    if (!confirm(`Собрать ${categories.length} продуктовых категорий (${estimatedProducts} позиций до удаления дублей)?`)) return;
+    if (!options.automatic&&!confirm(`Собрать ${categories.length} продуктовых категорий (${estimatedProducts} позиций до удаления дублей)?`)) return;
 
     const entries = [];
     const makeEntry = (url, method, requestBody, responseBody) => ({
@@ -142,6 +151,7 @@
       let page = 1;
       let totalPages = Math.max(1, Math.ceil(Number(category.products_count) / 24));
       while (page <= totalPages) {
+        if(options.stopped)throw new Error("Сбор остановлен пользователем");
         panel.textContent = `Kuper: ${categoryIndex + 1}/${categories.length} — ${category.name}, страница ${page}/${totalPages}`;
         const body = {
           ...template,
@@ -165,11 +175,13 @@
       log: {
         version: "1.2",
         creator: { name: "Kuper browser collector", version: "1.0" },
+        avelin: {store_id:String(sid),expected_categories:categories.map(category=>category.slug)},
         comment: "Complete food-category capture without cookies or request headers",
         entries
       }
     };
     const safeStem = /пят/i.test(storeName) ? "pyaterochka" : /хлеб|соль/i.test(storeName) ? "hleb&sol" : pathSlug;
+    if(options.onResult){await options.onResult({kind:"kuper",filename:`${safeStem}.complete.har`,data:har});return;}
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([JSON.stringify(har)], { type: "application/json" }));
     link.download = `${safeStem}.complete.har`;
@@ -179,7 +191,7 @@
     alert("Автосбор Kuper завершён. Добавьте скачанный HAR в программу и нажмите «Импортировать HAR».");
   } catch (error) {
     panel.textContent = "Автосбор Kuper остановлен";
-    alert(`Kuper: ${error.message}`);
+    if(options.onError)options.onError(error.message);else alert(`Kuper: ${error.message}`);
   } finally {
     window.fetch = originalFetch;
     XMLHttpRequest.prototype.open = originalOpen;

@@ -19,6 +19,8 @@ DB=ROOT/"data"/"avelin-health.db"
 DIST=ROOT/"dist"
 sys.path.insert(0,str(ROOT/"scripts"))
 from llm_provider import ollama_chat, ollama_events, settings, public_status
+import chat_history
+import recipes
 from agent_tools import TOOLS, TOOL_SCHEMAS, get_health_summary, get_nutrition_gap, search_store_products
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -94,7 +96,7 @@ def catalog_get(query):
       OR lower(COALESCE(name,'')) LIKE '%ликер%'
       OR lower(COALESCE(name,'')) LIKE '%ликёр%'
       THEN 0 ELSE 1 END"""
-    sql=f"SELECT store_name,name,brand,category,package,price_rub,protein,fat,carbs,calories,nutrition_basis,url,{food_case} is_food FROM catalog_products WHERE {' AND '.join(where)} ORDER BY is_food DESC,store_name,name LIMIT ?"
+    sql=f"SELECT store_name,name,brand,category,package,price_rub,protein,fat,carbs,calories,nutrition_basis,nutrition_source,url,{food_case} is_food FROM catalog_products WHERE {' AND '.join(where)} ORDER BY is_food DESC,store_name,name LIMIT ?"
     params.append(limit)
     with connect() as conn:
         rows=[dict(r) for r in conn.execute(sql,params)]
@@ -120,8 +122,9 @@ def openai_chat(messages):
     if not key: return {"text":offline_chat(messages[-1].get("content","")),"mode":"local"}
     model=os.getenv("AVELIN_OPENAI_MODEL","gpt-6-luna")
     instructions="""Ты Avelin Health, спокойный персональный помощник. Отвечай по-русски. Используй инструменты для фактов о здоровье, профиле и товарах. Не ставь диагнозы. Не выдумывай показатели здоровья, аллергии, цели или наличие товара. Для товаров без КБЖУ можешь оценивать калории и макронутриенты по названию и типичному составу, но всегда давай диапазон, помечай его как примерную оценку и напоминай, что фактическое значение из упаковки или FatSecret имеет приоритет. Не представляй оценку как измеренный факт. Для подбора еды учитывай подтверждённые ограничения пользователя."""
+    instructions += recipes.INSTRUCTIONS
     payload={"model":model,"instructions":instructions,"input":messages[-12:],"tools":TOOL_SCHEMAS,"parallel_tool_calls":False}
-    for _ in range(5):
+    for _ in range(12):
         req=urllib.request.Request("https://api.openai.com/v1/responses",data=json.dumps(payload).encode(),headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},method="POST")
         try:
             with urllib.request.urlopen(req,timeout=90) as response: result=json.load(response)
@@ -141,7 +144,7 @@ def openai_chat(messages):
                 try: value=TOOLS[name]["call"](**args)
                 except Exception as exc: value={"error":str(exc)[:200]}
             outputs.append({"type":"function_call_output","call_id":call["call_id"],"output":json.dumps(value,ensure_ascii=False)})
-        payload={"model":model,"previous_response_id":result["id"],"input":outputs,"tools":TOOL_SCHEMAS,"parallel_tool_calls":False}
+        payload={"model":model,"instructions":instructions,"previous_response_id":result["id"],"input":outputs,"tools":TOOL_SCHEMAS,"parallel_tool_calls":False}
     return {"text":"Превышен лимит последовательных обращений к данным.","mode":"error"}
 
 def chat(messages):
@@ -162,16 +165,22 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path=="/api/profile": return self.json_response(profile_get())
         if parsed.path=="/api/catalog": return self.json_response(catalog_get(parse_qs(parsed.query)))
         if parsed.path=="/api/status": return self.json_response({"ok":True,"app":"avelin-health",**public_status()})
+        if parsed.path=="/api/chat/history": return self.json_response({"messages":chat_history.history(DB)})
+        if parsed.path=="/api/recipes": return self.json_response({"recipes":recipes.list_saved(DB)})
         path=(DIST/(parsed.path.lstrip("/") or "index.html")).resolve()
         if DIST.resolve() not in path.parents and path!=DIST.resolve(): return self.send_error(403)
         if not path.is_file(): path=DIST/"index.html"
         raw=path.read_bytes(); self.send_response(200); self.send_header("Content-Type",mimetypes.guess_type(path.name)[0] or "application/octet-stream"); self.send_header("Content-Length",str(len(raw))); self.end_headers(); self.wfile.write(raw)
     def do_PUT(self):
+        if self.path.startswith("/api/recipes/"):
+            try:
+                return self.json_response(recipes.check(DB, self.path.rsplit("/",1)[-1], self.read_json().get("checked")))
+            except (ValueError, TypeError) as exc: return self.json_response({"error":str(exc)},400)
         if self.path=="/api/profile":
             try:return self.json_response(profile_put(self.read_json()))
             except Exception as exc:return self.json_response({"error":str(exc)},400)
         self.send_error(404)
-    def chat_stream(self, messages):
+    def chat_stream(self, messages, message_id):
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-transform")
@@ -182,30 +191,64 @@ class Handler(SimpleHTTPRequestHandler):
         def emit(event):
             self.wfile.write((json.dumps(event, ensure_ascii=False) + "\n").encode())
             self.wfile.flush()
+        content = ""
+        mode = model = None
+        saved = False
         try:
             if settings()["provider"] == "ollama":
                 for event in ollama_events(messages):
+                    if event["type"] == "delta": content += event.get("text", "")
+                    mode = event.get("mode", mode)
+                    model = event.get("model", model)
+                    if event["type"] == "done":
+                        chat_history.finish_turn(DB, message_id, content, mode, model)
+                        saved = True
                     emit(event)
             else:
                 result = chat(messages)
+                content, mode, model = result["text"], result["mode"], result.get("model")
+                chat_history.finish_turn(DB, message_id, content, mode, model)
+                saved = True
                 emit({"type": "delta", "text": result["text"]})
                 emit({"type": "done", "mode": result["mode"], "model": result.get("model")})
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             return
         except Exception as exc:
+            if not saved:
+                chat_history.finish_turn(DB, message_id, content, mode, model, str(exc))
+                saved = True
             try:
                 emit({"type": "error", "text": str(exc)})
             except OSError:
                 pass
+        finally:
+            if not saved:
+                chat_history.finish_turn(DB, message_id, content, mode, model, "Соединение прервалось. Попробуй отправить вопрос ещё раз.")
 
     def do_POST(self):
+        if self.path in {"/api/recipes", "/api/recipes/preview"}:
+            try:
+                data = self.read_json()
+                card = recipes.build(DB, **data) if self.path.endswith("/preview") else recipes.save(DB, data)
+                return self.json_response(card)
+            except (ValueError, TypeError, AttributeError) as exc: return self.json_response({"error":str(exc)},400)
         if self.path=="/api/chat":
             try:
                 data=self.read_json(); messages=data.get("messages",[])
-                if not messages:return self.json_response({"error":"messages required"},400)
+                if not messages or not isinstance(messages, list) or not isinstance(messages[-1], dict) or messages[-1].get("role") != "user":return self.json_response({"error":"user message required"},400)
+                content = messages[-1].get("content")
+                if not isinstance(content, str) or not content.strip(): return self.json_response({"error":"content required"},400)
+                message_id = chat_history.start_turn(DB, content)
+                messages = chat_history.context(DB)
                 if data.get("stream"):
-                    return self.chat_stream(messages)
-                return self.json_response(chat(messages))
+                    return self.chat_stream(messages, message_id)
+                try:
+                    result = chat(messages)
+                    chat_history.finish_turn(DB, message_id, result["text"], result.get("mode"), result.get("model"))
+                    return self.json_response(result)
+                except Exception as exc:
+                    chat_history.finish_turn(DB, message_id, "", error=str(exc))
+                    raise
             except Exception as exc:return self.json_response({"error":str(exc)},502)
         self.send_error(404)
     def log_message(self,format,*args): print(f"[Avelin] {format%args}")

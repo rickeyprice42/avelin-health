@@ -193,6 +193,7 @@ def test_fixprice_browser_bundle():
     ]}}());</script>'''
     bundle = {
         "format": "fixprice-pages-v1",
+        "total_pages": 1,
         "pages": [{"url": "https://fix-price.com/catalog/produkty-i-napitki", "html": state}],
     }
     with TemporaryDirectory() as folder:
